@@ -34,7 +34,7 @@ pip install -e '.[inference]'
 ## 3. Getting Checkpoints
 
 ```bash
-TAG=demo_fc_3dfy_v7
+TAG=public_v0
 CHECKPOINT_PATH=notebook/checkpoints/${TAG}
 FILES=(
     pipeline.yaml
