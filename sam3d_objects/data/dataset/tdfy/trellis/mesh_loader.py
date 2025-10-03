@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 from pytorch3d.io import IO
 from pytorch3d.io.experimental_gltf_io import MeshGlbFormat
 

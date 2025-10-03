@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 from .base import DepthModel
 
 class MoGe(DepthModel):

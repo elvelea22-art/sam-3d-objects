@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 from torch import nn
 import torch.nn.functional as F
 from typing import Optional

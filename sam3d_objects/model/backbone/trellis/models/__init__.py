@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 
 from .sparse_structure_flow import SparseStructureFlowModel, SparseStructureFlowTdfyWrapper
 from .sparse_structure_vae import SparseStructureEncoder, SparseStructureDecoder

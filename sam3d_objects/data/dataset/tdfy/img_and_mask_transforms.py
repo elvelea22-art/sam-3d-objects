@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 import random
 import torchvision.transforms as tv_transforms
 import torch

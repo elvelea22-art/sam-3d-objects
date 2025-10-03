@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 import torch
 from typing import Dict, Optional, Tuple, Any
 from dataclasses import dataclass, asdict, field

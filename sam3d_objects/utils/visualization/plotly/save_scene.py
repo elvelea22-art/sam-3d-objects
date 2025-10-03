@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 import plotly.graph_objects as go
 from plotly.graph_objects import Figure
 import numpy as np

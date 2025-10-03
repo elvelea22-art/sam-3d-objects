@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 from collections import namedtuple
 from typing import Tuple, Optional, Union
 import numpy as np

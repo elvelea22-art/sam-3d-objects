@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # TODO: Sasha wrapper for the PoseTarget decoder
 # TODO: Hao connect the function
 

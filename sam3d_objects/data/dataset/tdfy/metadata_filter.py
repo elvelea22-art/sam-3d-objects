@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 import pandas as pd
 from typing import Callable, List, Optional
 

@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 import torch
 from typing import Sequence, Union, Optional, Dict
 from lightning.pytorch import Callback, LightningModule

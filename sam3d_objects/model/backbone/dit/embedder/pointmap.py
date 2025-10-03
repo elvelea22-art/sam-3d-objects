@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 from timm.models.vision_transformer import Block
 import torch
 from torch import nn

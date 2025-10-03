@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 """
 Utility functions for point map processing and intrinsics inference.
 Extracted from moge library for use in sam3d_objects pipeline.

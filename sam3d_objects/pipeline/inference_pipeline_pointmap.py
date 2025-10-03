@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 from typing import Union, Optional
 from sam3d_objects.model.backbone.dit.embedder.pointmap import PointPatchEmbed
 import numpy as np

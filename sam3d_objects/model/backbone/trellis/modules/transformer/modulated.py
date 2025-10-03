@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 from functools import partial
 from typing import *
 from torch.utils import _pytree

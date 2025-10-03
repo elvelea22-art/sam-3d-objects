@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 from typing import Callable, Sequence, Union
 import torch
 import numpy as np

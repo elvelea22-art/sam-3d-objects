@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 from typing import Any, Callable, Dict, List, Optional, Union, Iterable
 import lightning.pytorch as pl
 import torch

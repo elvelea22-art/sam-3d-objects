@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 import torch
 from ...modules.sparse import SparseTensor
 from easydict import EasyDict as edict
