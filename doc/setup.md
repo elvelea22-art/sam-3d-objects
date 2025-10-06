@@ -33,9 +33,26 @@ pip install -e '.[inference]'
 
 ## 3. Getting Checkpoints
 
+### From HuggingFace
+
+```bash
+pip install -U "huggingface_hub[cli]"
+
+TAG=hf
+hf download \
+  --repo-type model \
+  --local-dir checkpoints/${TAG}-download \
+  --max-workers 1 \
+  facebook/sam-3d-objects
+mv checkpoints/${TAG}-download/checkpoints checkpoints/${TAG}
+rm -rf checkpoints/${TAG}-download
+```
+
+### From Meta
+
 ```bash
 TAG=public_v0
-CHECKPOINT_PATH=notebook/checkpoints/${TAG}
+CHECKPOINT_PATH=checkpoints/${TAG}
 FILES=(
     pipeline.yaml
     slat_decoder_mesh.pt
