@@ -6,17 +6,20 @@ os.environ["CUDA_HOME"] = os.environ["CONDA_PREFIX"]
 os.environ["LIDRA_SKIP_INIT"] = "true"
 
 import sys
-from typing import Union, Optional
+from typing import Union, Optional, List, Callable
 import numpy as np
 from PIL import Image
-from omegaconf import OmegaConf
-from hydra.utils import instantiate
+from omegaconf import OmegaConf, DictConfig, ListConfig
+from hydra.utils import instantiate, get_method
 import torch
 import math
 import utils3d
+import shutil
+import subprocess
 from copy import deepcopy
 from kaolin.visualize import IpyTurntableVisualizer
 from kaolin.render.camera import Camera, CameraExtrinsics, PinholeIntrinsics
+import builtins
 
 import sam3d_objects  # REMARK(Pierre) : do not remove this import
 from sam3d_objects.pipeline.inference_pipeline_pointmap import InferencePipelinePointMap
@@ -30,6 +33,51 @@ __all__ = ["Inference"]
 if "li" + "dra" not in sys.modules:
     sys.modules["li" + "dra"] = sam3d_objects
 
+WHITELIST_FILTERS = [
+    lambda target: target.split(".", 1)[0] in {"sam3d_objects", "torch", "torchvision", "moge"},
+]
+
+BLACKLIST_FILTERS = [
+    lambda target: get_method(target)
+    in {
+        builtins.exec,
+        builtins.eval,
+        builtins.__import__,
+        builtins.exit,
+        builtins.quit,
+        os.kill,
+        os.system,
+        os.putenv,
+        os.remove,
+        os.removedirs,
+        os.rmdir,
+        os.fchdir,
+        os.setuid,
+        os.fork,
+        os.forkpty,
+        os.killpg,
+        os.rename,
+        os.renames,
+        os.truncate,
+        os.replace,
+        os.unlink,
+        os.fchmod,
+        os.fchown,
+        os.chmod,
+        os.chown,
+        os.chroot,
+        os.fchdir,
+        os.lchown,
+        os.getcwd,
+        os.chdir,
+        shutil.rmtree,
+        shutil.move,
+        shutil.chown,
+        subprocess.Popen,
+        builtins.help,
+    },
+]
+
 
 class Inference:
     # public facing inference API
@@ -40,6 +88,7 @@ class Inference:
         config.rendering_engine = "pytorch3d"  # overwrite to disable nvdiffrast
         config.compile_model = compile
         config.workspace_dir = os.path.dirname(config_file)
+        check_hydra_safety(config, WHITELIST_FILTERS, BLACKLIST_FILTERS)
         self._pipeline: InferencePipelinePointMap = instantiate(config)
 
     def __call__(
@@ -132,7 +181,7 @@ def render_video_ring(
         sample,
         extrinsics,
         intrinsics,
-        {"resolution": resolution, "bg_color": bg_color, "backend": "gsplat"},
+        {"resolution": resolution, "bg_color": bg_color},
         **kwargs,
     )
 
@@ -160,7 +209,7 @@ def render_video_flat(
         sample,
         extr,
         intr,
-        {"resolution": resolution, "bg_color": bg_color, "backend": "gsplat"},
+        {"resolution": resolution, "bg_color": bg_color},
         **kwargs,
     )
 
@@ -267,6 +316,43 @@ def get_gaussian_splatting_visualizer(scene_gs, device="cuda"):
 
     return vizualizer
 
+
+def check_target(
+    target: str,
+    whitelist_filters: List[Callable],
+    blacklist_filters: List[Callable],
+):
+    if any(filt(target) for filt in whitelist_filters):
+        if not any(filt(target) for filt in blacklist_filters):
+            return
+    raise RuntimeError(
+        f"target '{target}' is not allowed to be hydra instantiated, if this is a mistake, please do modify the whitelist_filters / blacklist_filters"
+    )
+
+
+def check_hydra_safety(
+    config: DictConfig,
+    whitelist_filters: List[Callable],
+    blacklist_filters: List[Callable],
+):
+    to_check = [config]
+    while len(to_check) > 0:
+        node = to_check.pop()
+        if isinstance(node, DictConfig):
+            to_check.extend(list(node.values()))
+            if "_target_" in node:
+                check_target(node["_target_"], whitelist_filters, blacklist_filters)
+        elif isinstance(node, ListConfig):
+            to_check.extend(list(node))
+
+
+if __name__ == "__main__":
+    PATH = os.getcwd()
+    TAG = "public_v0"
+    config_path = (
+        f"{PATH}/scripts/gleize/public_release/checkpoints/{TAG}/pipeline.yaml"
+    )
+    inference = Inference(config_path, compile=False)
 
 # def prepare_gaussian_outputs(outputs):
 #     all_outs = []
