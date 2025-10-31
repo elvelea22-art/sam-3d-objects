@@ -8,7 +8,7 @@ from PIL import Image
 
 
 from sam3d_objects.data.dataset.tdfy.trellis.dataset import PreProcessor
-from torchvision.transforms import Compose, Resize
+from torchvision.transforms import Compose, Resize, InterpolationMode
 from sam3d_objects.data.dataset.tdfy.img_processing import pad_to_square_centered
 from sam3d_objects.data.dataset.tdfy.img_and_mask_transforms import (
     rembg,
@@ -21,7 +21,7 @@ def get_default_preprocessor():
     img_transform = Compose(
         transforms=[
             partial(pad_to_square_centered),
-            Resize(size=518),
+            Resize(size=518, interpolation=InterpolationMode.BICUBIC),
         ]
     )
     mask_transform = Compose(

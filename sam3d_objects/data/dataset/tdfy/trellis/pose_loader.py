@@ -104,7 +104,7 @@ class R3:
             instance_pose["instance_scale_l2c"][..., -1].unsqueeze(-1),
         ):
             logger.opt(exception=False).warning(
-                f"Scale is not isotropic. This is unexpected!! Are you using 'scales' instead of 'scale' in the transforms.json file? {scale_l2c}."
+                f"Scale is not isotropic. This is unexpected!! Are you using 'scales' instead of 'scale' in the transforms.json file? {instance_pose['instance_scale_l2c']}."
             )
 
         # Camera intrinsic matrix is in NDC space.
@@ -274,9 +274,14 @@ class R3:
                 f"Pointmap directory not found at {standard_dir} and sha256/image_fname not provided for corrected format"
             )
         
+        return R3._load_pointmap(base_path, dirname)
+
+
+    @staticmethod
+    def _load_pointmap(base_path: str, base_name: str) -> torch.Tensor:
         # Load the pointmap files
-        ply_path = os.path.join(base_path, f"{dirname}.ply")
-        metadata_path = os.path.join(base_path, f"{dirname}_metadata.json")
+        ply_path = os.path.join(base_path, f"{base_name}.ply")
+        metadata_path = os.path.join(base_path, f"{base_name}_metadata.json")
         
         verts, faces = load_ply(ply_path)
         with open(metadata_path, "r") as f:
@@ -298,6 +303,7 @@ class R3:
         )
         
         return points_tensor
+
 
     @staticmethod
     def r3_transform_json_to_trellis(

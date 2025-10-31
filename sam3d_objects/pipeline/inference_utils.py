@@ -324,7 +324,7 @@ def pose_decoder(
         return {
             "translation": pose_instance_dict["instance_position_l2c"].squeeze(0),
             "rotation": pose_instance_dict["instance_quaternion_l2c"].squeeze(0),
-            "scale": pose_instance_dict["instance_scale_l2c"].squeeze(0),
+            "scale": pose_instance_dict["instance_scale_l2c"].squeeze(0).mean(-1, keepdim=True).expand(1,3),
         }
 
     return decode
@@ -342,6 +342,7 @@ def zero_prediction_decoder():
         return _pose_decoder(model_output_dict, scene_scale, scene_shift)
 
     return decode
+
 
 def get_default_pose_decoder():
     def decode(model_output_dict, **kwargs):
@@ -433,7 +434,7 @@ def downsample_sparse_structure(
         Downsampled coord_batch with coordinates rescaled if downsampling is needed
     """
     if coord_batch.shape[0] <= max_coords:
-        return coord_batch
+        return coord_batch, 1
 
     # Extract coordinates and batch indices
     coords = coord_batch[:, 1:].float()  # Shape: (N, 3), convert to float for scaling
@@ -476,7 +477,7 @@ def downsample_sparse_structure(
         ]
         unique_combined = unique_combined[indices]
 
-    return unique_combined.int()
+    return unique_combined.int(), downsample_factor
 
 
 def normalize_mesh_verts(verts):

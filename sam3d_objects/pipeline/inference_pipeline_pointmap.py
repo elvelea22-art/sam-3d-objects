@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from torch.utils._pytree import tree_map_only
+import torchvision
 from loguru import logger
 from functools import wraps
 from PIL import Image
@@ -41,7 +42,7 @@ def recursive_fn_factory(fn):
         # applied it.
         if b is None:
             return b
-        trivial_types = [bool, int]
+        trivial_types = [bool, int, float]
         for t in trivial_types:
             if isinstance(b, t):
                 return b
@@ -75,11 +76,11 @@ def compile_wrapper(
 class InferencePipelinePointMap(InferencePipeline):
 
     def __init__(
-        self, *args, depth_model, layout_post_optimization_method=None, **kwargs
+        self, *args, depth_model, layout_post_optimization_method=None, clip_pointmap_beyond_scale=None, **kwargs
     ):
         self.depth_model = depth_model
         self.layout_post_optimization_method = layout_post_optimization_method
-
+        self.clip_pointmap_beyond_scale = clip_pointmap_beyond_scale
         super().__init__(*args, **kwargs)
 
     def _compile(self):
@@ -237,9 +238,38 @@ class InferencePipelinePointMap(InferencePipeline):
 
         return item
 
+    def _clip_pointmap(self, pointmap: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.clip_pointmap_beyond_scale is None:
+            return pointmap
+
+        pointmap_size = (pointmap.shape[1], pointmap.shape[2])
+        if mask.dim() == 2:
+            mask = mask.unsqueeze(0)
+        mask_resized = torchvision.transforms.functional.resize(
+            mask, pointmap_size,
+            interpolation=torchvision.transforms.InterpolationMode.NEAREST
+        ).squeeze(0)
+
+        pointmap_flat = pointmap.reshape(3, -1)
+        # Get valid points from the mask
+        mask_bool = mask_resized.reshape(-1) > 0.5
+        mask_points = pointmap_flat[:, mask_bool]
+        mask_distance = mask_points.nanmedian(dim=-1).values[-1]
+        logger.info(f"mask_distance: {mask_distance}")
+        pointmap_clipped_flat = torch.where(
+            pointmap_flat[2, ...].abs() > self.clip_pointmap_beyond_scale * mask_distance,
+            torch.full_like(pointmap_flat, float('nan')),
+            pointmap_flat
+        )
+        pointmap_clipped = pointmap_clipped_flat.reshape(pointmap.shape)
+        return pointmap_clipped
+
+
+
     def compute_pointmap(self, image, pointmap=None):
         loaded_image = self.image_to_float(image)
         loaded_image = torch.from_numpy(loaded_image)
+        loaded_mask = loaded_image[..., -1]
         loaded_image = loaded_image.permute(2, 0, 1).contiguous()[:3]
 
         if pointmap is None:
@@ -258,17 +288,18 @@ class InferencePipelinePointMap(InferencePipeline):
             output = {}
             points_tensor = pointmap.to(self.device)
             if loaded_image.shape != points_tensor.shape:
-                # Interpolate loaded_image to match points_tensor size
-                # points_tensor has shape [H, W, 3], we need H and W
-                loaded_image = torch.nn.functional.interpolate(
-                    loaded_image.unsqueeze(0),
-                    size=(points_tensor.shape[0], points_tensor.shape[1]),
-                    mode="bicubic",
-                    align_corners=False,
-                ).squeeze(0)
+                # Interpolate points_tensor to match loaded_image size
+                # loaded_image has shape [3, H, W], we need H and W
+                points_tensor = torch.nn.functional.interpolate(
+                    points_tensor.permute(2, 0, 1).unsqueeze(0),
+                    size=(loaded_image.shape[1], loaded_image.shape[2]),
+                    mode="nearest",
+                ).squeeze(0).permute(1, 2, 0)
             intrinsics = None
 
         points_tensor = points_tensor.permute(2, 0, 1)
+        points_tensor = self._clip_pointmap(points_tensor, loaded_mask)
+        
         # Prepare the point map tensor
         point_map_tensor = {
             "pointmap": points_tensor,
@@ -278,7 +309,7 @@ class InferencePipelinePointMap(InferencePipeline):
         # If depth model doesn't provide intrinsics, infer them
         if intrinsics is None:
             intrinsics_result = infer_intrinsics_from_pointmap(
-                points_tensor, device=self.device
+                points_tensor.permute(1, 2, 0), device=self.device
             )
             point_map_tensor["intrinsics"] = intrinsics_result["intrinsics"]
 
@@ -308,6 +339,7 @@ class InferencePipelinePointMap(InferencePipeline):
             "iou": final_iou,
         }
 
+
     def run(
         self,
         image: Union[None, Image.Image, np.ndarray],
@@ -332,6 +364,8 @@ class InferencePipelinePointMap(InferencePipeline):
         with self.device:  # TODO(Pierre) make with context a decorator ?
             pointmap_dict = self.compute_pointmap(image, pointmap)
             pointmap = pointmap_dict["pointmap"]
+            pts = type(self)._down_sample_img(pointmap)
+            pts_colors = type(self)._down_sample_img(pointmap_dict["pts_color"])
 
             if estimate_plane:
                 return self.estimate_plane(pointmap_dict, image)
@@ -382,13 +416,16 @@ class InferencePipelinePointMap(InferencePipeline):
                 )
             )
 
+            logger.info(f"Rescaling scale by {ss_return_dict['downsample_factor']} after downsampling")
+            ss_return_dict["scale"] = ss_return_dict["scale"] * ss_return_dict["downsample_factor"]
+
             if stage1_only:
                 logger.info("Finished!")
                 ss_return_dict["voxel"] = ss_return_dict["coords"][:, 1:] / 64 - 0.5
                 return {
                     **ss_return_dict,
-                    "pointmap": pointmap.cpu().permute((1, 2, 0)),  # HxWx3
-                    # "pointmap_colors": pts_colors.cpu().permute((1, 2, 0)),  # HxWx3
+                    "pointmap": pts.cpu().permute((1, 2, 0)),  # HxWx3
+                    "pointmap_colors": pts_colors.cpu().permute((1, 2, 0)),  # HxWx3
                 }
                 # return ss_return_dict
 
@@ -428,9 +465,6 @@ class InferencePipelinePointMap(InferencePipeline):
 
             # glb.export("sample.glb")
             logger.info("Finished!")
-
-            pts = type(self)._down_sample_img(pointmap)
-            pts_colors = type(self)._down_sample_img(pointmap_dict["pts_color"])
 
             return {
                 **ss_return_dict,

@@ -177,12 +177,15 @@ class FlowMatching(Base):
             prediction,
             target,
         )
+
         total_loss = sum(optree.tree_flatten(loss)[0])
 
         # Create detailed loss breakdown
         detail_losses = {
             "flow_matching_loss": total_loss,
         }
+        if isinstance(loss, dict):
+            detail_losses.update(loss)
         return total_loss, detail_losses
 
     def _prepare_t(self, steps=None):

@@ -90,15 +90,18 @@ class InferencePipeline:
         ss_rescale_t=3,
         ss_cfg_strength=7,
         ss_cfg_interval=[0, 500],
+        ss_cfg_strength_pm=0.0,
         slat_inference_steps=25,
         slat_rescale_t=3,
         slat_cfg_strength=5,
         slat_cfg_interval=[0, 500],
         rendering_engine: str = "nvdiffrast",  # nvdiffrast OR pytorch3d,
         layout_model_dtype=None,
+        shape_model_dtype=None,
         compile_model=False,
         slat_mean=SLAT_MEAN,
         slat_std=SLAT_STD,
+        use_pretrained_ss=False,
     ):
         self.rendering_engine = rendering_engine
         self.device = torch.device(device)
@@ -121,16 +124,23 @@ class InferencePipeline:
             self.ss_rescale_t = ss_rescale_t
             self.ss_cfg_strength = ss_cfg_strength
             self.ss_cfg_interval = ss_cfg_interval
+            self.ss_cfg_strength_pm = ss_cfg_strength_pm
             self.slat_inference_steps = slat_inference_steps
             self.slat_rescale_t = slat_rescale_t
             self.slat_cfg_strength = slat_cfg_strength
             self.slat_cfg_interval = slat_cfg_interval
+            self.use_pretrained_ss = use_pretrained_ss
 
             self.dtype = self._get_dtype(dtype)
             if layout_model_dtype is None:
                 self.layout_model_dtype = self.dtype
             else:
                 self.layout_model_dtype = self._get_dtype(layout_model_dtype)
+            if shape_model_dtype is None:
+                self.shape_model_dtype = self.dtype
+            else:
+                self.shape_model_dtype = self._get_dtype(shape_model_dtype) 
+
 
             # Setup preprocessors
             self.pose_decoder = self.init_pose_decoder(ss_generator_config_path, pose_decoder_name)
@@ -189,6 +199,7 @@ class InferencePipeline:
                 inference_steps=ss_inference_steps,
                 rescale_t=ss_rescale_t,
                 cfg_interval=ss_cfg_interval,
+                cfg_strength_pm=ss_cfg_strength_pm,
             )
             self.override_slat_generator_cfg_config(
                 slat_generator,
@@ -203,6 +214,7 @@ class InferencePipeline:
                 inference_steps=ss_inference_steps,
                 rescale_t=ss_rescale_t,
                 cfg_interval=ss_cfg_interval,
+                cfg_strength_pm=ss_cfg_strength_pm,
             )
 
             self.models = torch.nn.ModuleDict(
@@ -343,16 +355,28 @@ class InferencePipeline:
         config = OmegaConf.load(os.path.join(self.workspace_dir, ss_generator_config_path))["tdfy"]["val_preprocessor"]
         return instantiate(config)
 
+
     def init_ss_generator(self, ss_generator_config_path, ss_generator_ckpt_path):
-        return self.instantiate_and_load_from_pretrained(
-            OmegaConf.load(os.path.join(self.workspace_dir, ss_generator_config_path))[
-                "module"
-            ]["generator"]["backbone"],
-            os.path.join(self.workspace_dir, ss_generator_ckpt_path),
-            # state_dict_fn=remove_prefix_state_dict_fn("_base_models.generator."),
-            state_dict_fn=filter_and_remove_prefix_state_dict_fn(
+        config = OmegaConf.load(
+            os.path.join(self.workspace_dir, ss_generator_config_path)
+        )["module"]["generator"]["backbone"]
+
+        # Override with PointmapCFG if ss_cfg_strength_pm is not None
+        if isinstance(self.ss_cfg_strength_pm, dict) or (self.ss_cfg_strength_pm is not None and self.ss_cfg_strength_pm > 0.0):
+            logger.info(f"Using PointmapCFG with strength_pm: {self.ss_cfg_strength_pm}")
+            config['reverse_fn']['_target_'] = 'sam3d_objects.model.backbone.generator.classifier_free_guidance.PointmapCFG'
+        
+        if self.use_pretrained_ss:
+            state_dict_prefix_func = add_prefix_state_dict_fn("reverse_fn.backbone.")
+        else:
+            state_dict_prefix_func = filter_and_remove_prefix_state_dict_fn(
                 "_base_models.generator."
-            ),
+            )
+
+        return self.instantiate_and_load_from_pretrained(
+            config,
+            os.path.join(self.workspace_dir, ss_generator_ckpt_path),
+            state_dict_fn=state_dict_prefix_func,
             device=self.device,
         )
 
@@ -497,6 +521,7 @@ class InferencePipeline:
         inference_steps=25,
         rescale_t=3,
         cfg_interval=[0, 500],
+        cfg_strength_pm=0.0,
     ):
         # override generator setting
         ss_generator.inference_steps = inference_steps
@@ -505,13 +530,15 @@ class InferencePipeline:
         ss_generator.rescale_t = rescale_t
         ss_generator.reverse_fn.backbone.condition_embedder.normalize_images = True
         ss_generator.reverse_fn.unconditional_handling = "add_flag"
+        ss_generator.reverse_fn.strength_pm = cfg_strength_pm
 
         logger.info(
-            "ss_generator parameters: inference_steps={}, cfg_strength={}, cfg_interval={}, rescale_t={}",
+            "ss_generator parameters: inference_steps={}, cfg_strength={}, cfg_interval={}, rescale_t={}, cfg_strength_pm={}",
             inference_steps,
             cfg_strength,
             cfg_interval,
             rescale_t,
+            cfg_strength_pm,
         )
 
     def override_slat_generator_cfg_config(
@@ -562,6 +589,7 @@ class InferencePipeline:
         inference_steps=25,
         rescale_t=3,
         cfg_interval=[0, 500],
+        cfg_strength_pm=0.0,
     ):
         if layout_model is not None:
             self.override_ss_generator_cfg_config(
@@ -570,6 +598,7 @@ class InferencePipeline:
                 inference_steps=inference_steps,
                 rescale_t=rescale_t,
                 cfg_interval=cfg_interval,
+                cfg_strength_pm=cfg_strength_pm,
             )
 
     def run(
@@ -621,6 +650,9 @@ class InferencePipeline:
             ss_return_dict.update(layout_return_dict)
             ss_return_dict.update(self.pose_decoder(ss_return_dict))
 
+            if "scale" in ss_return_dict:
+                logger.info(f"Rescaling scale by {ss_return_dict['downsample_factor']}")
+                ss_return_dict["scale"] = ss_return_dict["scale"] * ss_return_dict["downsample_factor"]
             if stage1_only:
                 logger.info("Finished!")
                 ss_return_dict["voxel"] = ss_return_dict["coords"][:, 1:] / 64 - 0.5
@@ -764,9 +796,11 @@ class InferencePipeline:
         if use_distillation:
             ss_generator.no_shortcut = False
             ss_generator.reverse_fn.strength = 0
+            ss_generator.reverse_fn.strength_pm = 0
         else:
             ss_generator.no_shortcut = True
             ss_generator.reverse_fn.strength = self.ss_cfg_strength
+            ss_generator.reverse_fn.strength_pm = self.ss_cfg_strength_pm
 
         prev_inference_steps = ss_generator.inference_steps
         if inference_steps:
@@ -775,15 +809,16 @@ class InferencePipeline:
         image = ss_input_dict["image"]
         bs = image.shape[0]
         logger.info(
-            "Sampling sparse structure: inference_steps={}, strength={}, interval={}, rescale_t={}",
+            "Sampling sparse structure: inference_steps={}, strength={}, interval={}, rescale_t={}, cfg_strength_pm={}",
             ss_generator.inference_steps,
             ss_generator.reverse_fn.strength,
             ss_generator.reverse_fn.interval,
             ss_generator.rescale_t,
+            ss_generator.reverse_fn.strength_pm,
         )
 
         with torch.no_grad():
-            with torch.autocast(device_type="cuda", dtype=self.dtype):
+            with torch.autocast(device_type="cuda", dtype=self.shape_model_dtype):
                 if self.is_mm_dit():
                     latent_shape_dict = {
                         k: (bs,) + (v.pos_emb.shape[0], v.input_layer.in_features)
@@ -822,11 +857,12 @@ class InferencePipeline:
                         coords,
                         max_neighbor_axes_dist=self.downsample_ss_dist,
                     )
-                coords = downsample_sparse_structure(coords)
+                coords, downsample_factor = downsample_sparse_structure(coords)
                 logger.info(
                     f"Downsampled coords from {original_shape[0]} to {coords.shape[0]}"
                 )
                 return_dict["coords"] = coords
+                return_dict["downsample_factor"] = downsample_factor
 
         ss_generator.inference_steps = prev_inference_steps
         return return_dict

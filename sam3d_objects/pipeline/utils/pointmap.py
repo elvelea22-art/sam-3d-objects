@@ -7,7 +7,6 @@ Extracted from moge library for use in sam3d_objects pipeline.
 from typing import Optional, Tuple, Union
 import torch
 import utils3d
-
 # Import directly from moge for exact compatibility
 from moge.utils.geometry_torch import (
     normalized_view_plane_uv,
@@ -91,7 +90,8 @@ def infer_intrinsics_from_pointmap(
         if force_projection:
             points = utils3d.torch.depth_to_points(depth, intrinsics=intrinsics)
         else:
-            points = points + torch.stack([torch.zeros_like(shift), torch.zeros_like(shift), shift], dim=-1)[..., None, None, :]
+            shift_stacked = torch.stack([torch.zeros_like(shift), torch.zeros_like(shift), shift], dim=-1)[..., None, None, :]
+            points = points + shift_stacked
 
         # Apply mask if needed
         if apply_mask:

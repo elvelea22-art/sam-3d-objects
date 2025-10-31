@@ -1,8 +1,11 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
+from functools import partial
+from numbers import Number
 import torch
 import random
 from torch.utils import _pytree
 from torch.utils._pytree import tree_map_only
+from loguru import logger
 
 def _zeros_like(struct):
     def make_zeros(x):
@@ -93,13 +96,16 @@ class ClassifierFreeGuidance(torch.nn.Module):
             ]
         )
 
-    def _cfg_step_tensor(self, y_cond, y_uncond):
-        return (1 + self.strength) * y_cond - self.strength * y_uncond
+    def _cfg_step_tensor(self, y_cond, y_uncond, strength):
+        return (1 + strength) * y_cond - strength * y_uncond
 
-    def _cfg_step(self, y_cond, y_uncond):
-        return _pytree.tree_map(self._cfg_step_tensor, y_cond, y_uncond)
+    def _cfg_step(self, y_cond, y_uncond, strength):
+        if isinstance(strength, dict):
+            return _pytree.tree_map(self._cfg_step_tensor, y_cond, y_uncond, strength)
+        else:
+            return _pytree.tree_map(partial(self._cfg_step_tensor, strength=strength), y_cond, y_uncond)
 
-    def inner_forward(self, x, t, is_cond, *args_cond, **kwargs_cond):
+    def inner_forward(self, x, t, is_cond, strength, *args_cond, **kwargs_cond):
         y_cond = self.backbone(x, t, *args_cond, **kwargs_cond)
         if is_cond:
             return y_cond
@@ -109,7 +115,7 @@ class ClassifierFreeGuidance(torch.nn.Module):
                 kwargs_cond,
             )
             y_uncond = self.backbone(x, t, *args_cond, **kwargs_cond)
-            return self._cfg_step(y_cond, y_uncond)
+            return self._cfg_step(y_cond, y_uncond, strength)
 
     def forward(self, x, t, *args_cond, **kwargs_cond):
         # handle case when no conditional arguments are provided
@@ -130,14 +136,90 @@ class ClassifierFreeGuidance(torch.nn.Module):
                     )
                 return self.backbone(x, t, *args_cond, **kwargs_cond)
             else:  # inference mode
-                in_interval = (self.interval is None) or (
-                    self.interval[0] <= t <= self.interval[1]
-                )
-                is_cond = not(self.strength > 0.0 and in_interval)
+                strength = get_strength(self.strength, self.interval, t)
+                is_cond = not any(x > 0.0 for x in _pytree.tree_flatten(strength)[0])
                 return self.inner_forward(
-                    x, t, is_cond, *args_cond, **kwargs_cond
+                    x, t, is_cond, strength, *args_cond, **kwargs_cond
                 )
 
+def get_strength(strength, interval, t):
+    if interval is None:
+        return _pytree.tree_map(lambda x: 0.0, strength)
+    
+    # If interval is not a dict (single tuple), broadcast it
+    if not isinstance(interval, dict):
+        return _pytree.tree_map(
+            lambda x: x if interval[0] <= t <= interval[1] else 0.0,
+            strength
+        )
+
+    return _pytree.tree_map(
+        lambda x, iv: x if iv[0] <= t <= iv[1] else 0.0,
+        strength,
+        interval
+    )
+
+class PointmapCFG(ClassifierFreeGuidance):
+
+    def __init__(self, *args, strength_pm=0.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.strength_pm = strength_pm
+
+    def _cfg_step_tensor(self, y_cond, y_uncond, y_unpm, strength, strength_pm):
+        # https://arxiv.org/abs/2411.18613
+        return y_cond \
+            + strength_pm * (y_cond - y_unpm) \
+            + strength * (y_unpm - y_uncond)
+
+    def _cfg_step(self, y_cond, y_uncond, y_pm, strength, strength_pm):
+        if isinstance(strength, dict):
+            return _pytree.tree_map(self._cfg_step_tensor, y_cond, y_uncond, y_pm, strength, strength_pm)
+        else:
+            return _pytree.tree_map(partial(self._cfg_step_tensor, strength=strength, strength_pm=strength_pm), y_cond, y_uncond, y_pm)
+
+    def inner_forward(self, x, t, is_cond, strength, strength_pm, *args_cond, **kwargs_cond):
+        y_cond = self.backbone(x, t, *args_cond, **kwargs_cond)
+
+        if is_cond:
+            return y_cond
+        else:                        
+            force_drop_modalities = self.backbone.condition_embedder.force_drop_modalities
+            self.backbone.condition_embedder.force_drop_modalities = ['pointmap', 'rgb_pointmap']
+            y_pm = self.backbone(x, t, *args_cond, **kwargs_cond)
+            self.backbone.condition_embedder.force_drop_modalities = force_drop_modalities
+
+            args_cond, kwargs_cond = self._make_unconditional_args(
+                args_cond,
+                kwargs_cond,
+            )
+            y_uncond = self.backbone(x, t, *args_cond, **kwargs_cond)
+            return self._cfg_step(y_cond, y_uncond, y_pm, strength, strength_pm)
+
+    def forward(self, x, t, *args_cond, **kwargs_cond):
+        # handle case when no conditional arguments are provided
+        if len(args_cond) + len(kwargs_cond) == 0:  # unconditional
+            if self.unconditional_handling != "discard":
+                raise RuntimeError(
+                    f"cannot call `ClassifierFreeGuidance` module without condition"
+                )
+            return self.backbone(x, t)
+        else:  # conditional arguments are provided
+            # training mode
+            if self.training:
+                coin_flip = random.random() < self.p_unconditional
+                if coin_flip:  # unconditional
+                    args_cond, kwargs_cond = self._make_unconditional_args(
+                        args_cond,
+                        kwargs_cond,
+                    )
+                return self.backbone(x, t, *args_cond, **kwargs_cond)
+            else:  # inference mode
+                strength = get_strength(self.strength, self.interval, t)
+                is_cond = not any(x > 0.0 for x in _pytree.tree_flatten(strength)[0])
+                strength_pm = get_strength(self.strength_pm, self.interval, t)
+                return self.inner_forward(
+                    x, t, is_cond, strength, strength_pm, *args_cond, **kwargs_cond
+                )
 
 class ClassifierFreeGuidanceWithExternalUnconditionalProbability(ClassifierFreeGuidance):
 
@@ -170,10 +252,8 @@ class ClassifierFreeGuidanceWithExternalUnconditionalProbability(ClassifierFreeG
                     )
                 return self.backbone(x, t, *args_cond, **kwargs_cond)
             else:  # inference mode
-                in_interval = (self.interval is None) or (
-                    self.interval[0] <= t <= self.interval[1]
-                )
-                is_cond = not(self.strength > 0.0 and in_interval)
+                strength = get_strength(self.strength, self.interval, t)
+                is_cond = not any(x > 0.0 for x in _pytree.tree_flatten(strength)[0])
                 return self.inner_forward(
-                    x, t, is_cond, *args_cond, **kwargs_cond
+                    x, t, is_cond, strength, *args_cond, **kwargs_cond
                 )

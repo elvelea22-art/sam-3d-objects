@@ -524,12 +524,14 @@ class ObjectCentricSSI(SSIPointmapNormalizer):
         # scale_factor: float = 3.8076, # e^(1.337); empirical mean of R3+Artist train
         scale_factor: float = 1.0, # e^(1.337); empirical mean of R3+Artist train
         allow_scale_and_shift_override: bool = False,
+        raise_on_no_valid_points: bool = False,
     ):
         self.use_scene_scale = use_scene_scale
         self.quantile_drop_threshold = quantile_drop_threshold
         self.clip_beyond_scale = clip_beyond_scale
         self.scale_factor = scale_factor
         self.allow_scale_and_shift_override = allow_scale_and_shift_override
+        self.raise_on_no_valid_points = raise_on_no_valid_points
 
     def _compute_scale_and_shift(self, pointmap: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         pointmap_size = (pointmap.shape[1], pointmap.shape[2])
@@ -545,6 +547,11 @@ class ObjectCentricSSI(SSIPointmapNormalizer):
         mask_bool = mask_resized.reshape(-1) > 0.5
         mask_points = pointmap_flat[:, mask_bool]
 
+        if mask_points.isfinite().max() == 0:
+            if self.raise_on_no_valid_points:
+                raise ValueError(f"No valid points found in mask")
+            logger.warning(f"No valid points found in mask; setting scale to {self.scale_factor} and shift to 0")
+            return torch.ones_like(pointmap_flat[:,0]) * self.scale_factor, torch.zeros_like(pointmap_flat[:,0])
 
         # Compute median for shift
         shift = mask_points.nanmedian(dim=-1).values

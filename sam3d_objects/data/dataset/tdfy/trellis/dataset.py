@@ -277,6 +277,8 @@ class PerSubsetDataset(torch.utils.data.Dataset):
 
         # set pose loader
         self.pose_loader = pose_loader
+        if self.pose_loader is None:
+            logger.warning("No pose_loader provided. Poses will not be loaded!")
 
         # set latent_loader
         self.latent_loader = latent_loader
@@ -414,6 +416,9 @@ class PerSubsetDataset(torch.utils.data.Dataset):
         return available_poses
 
     def _load_pose(self, sha256: str, view_id: str):
+        if self.pose_loader is None:
+            return {}
+
         available_poses = self._load_available_poses(sha256, view_id)
         sampled_pose = available_poses[view_id]
         self._validate_pose(sha256, view_id, sampled_pose)
@@ -507,6 +512,13 @@ class PerSubsetDataset(torch.utils.data.Dataset):
             # read available views if there are multiple images under render_cond
             if sample_uuid.image_fname is None:
                 sha256 = sample_uuid.sha256
+
+                # Check if renders_cond directory exists before attempting to sample
+                image_dir = self._get_cond_image_dir(sha256)
+                if not os.path.exists(image_dir) or not os.path.isdir(image_dir):
+                    logger.warning(f"Image directory not found: {image_dir}")
+                    return None
+            
                 image_fname = self._sample_view(sha256)
                 sample_uuid = PerSubsetSampleID(sha256=sha256, image_fname=image_fname)
 
